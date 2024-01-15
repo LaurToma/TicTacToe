@@ -1,0 +1,594 @@
+#include <Keypad.h>
+
+// cod temporar, necesar pentru compilare pe godbolt
+#if 0
+
+#include <Arduino.h>
+
+class Keypad {
+   public:
+    Keypad(int, byte[4], byte[4], const byte&, const byte&);
+    char getKey();
+};
+
+int makeKeymap(char[4][4]);
+
+#endif  // 0
+
+// *************************** BUZZER MUSIC ***************************
+
+#define NOTE_B0 31
+#define NOTE_C1 33
+#define NOTE_CS1 35
+#define NOTE_D1 37
+#define NOTE_DS1 39
+#define NOTE_E1 41
+#define NOTE_F1 44
+#define NOTE_FS1 46
+#define NOTE_G1 49
+#define NOTE_GS1 52
+#define NOTE_A1 55
+#define NOTE_AS1 58
+#define NOTE_B1 62
+#define NOTE_C2 65
+#define NOTE_CS2 69
+#define NOTE_D2 73
+#define NOTE_DS2 78
+#define NOTE_E2 82
+#define NOTE_F2 87
+#define NOTE_FS2 93
+#define NOTE_G2 98
+#define NOTE_GS2 104
+#define NOTE_A2 110
+#define NOTE_AS2 117
+#define NOTE_B2 123
+#define NOTE_C3 131
+#define NOTE_CS3 139
+#define NOTE_D3 147
+#define NOTE_DS3 156
+#define NOTE_E3 165
+#define NOTE_F3 175
+#define NOTE_FS3 185
+#define NOTE_G3 196
+#define NOTE_GS3 208
+#define NOTE_A3 220
+#define NOTE_AS3 233
+#define NOTE_B3 247
+#define NOTE_C4 262
+#define NOTE_CS4 277
+#define NOTE_D4 294
+#define NOTE_DS4 311
+#define NOTE_E4 330
+#define NOTE_F4 349
+#define NOTE_FS4 370
+#define NOTE_G4 392
+#define NOTE_GS4 415
+#define NOTE_A4 440
+#define NOTE_AS4 466
+#define NOTE_B4 494
+#define NOTE_C5 523
+#define NOTE_CS5 554
+#define NOTE_D5 587
+#define NOTE_DS5 622
+#define NOTE_E5 659
+#define NOTE_F5 698
+#define NOTE_FS5 740
+#define NOTE_G5 784
+#define NOTE_GS5 831
+#define NOTE_A5 880
+#define NOTE_AS5 932
+#define NOTE_B5 988
+#define NOTE_C6 1047
+#define NOTE_CS6 1109
+#define NOTE_D6 1175
+#define NOTE_DS6 1245
+#define NOTE_E6 1319
+#define NOTE_F6 1397
+#define NOTE_FS6 1480
+#define NOTE_G6 1568
+#define NOTE_GS6 1661
+#define NOTE_A6 1760
+#define NOTE_AS6 1865
+#define NOTE_B6 1976
+#define NOTE_C7 2093
+#define NOTE_CS7 2217
+#define NOTE_D7 2349
+#define NOTE_DS7 2489
+#define NOTE_E7 2637
+#define NOTE_F7 2794
+#define NOTE_FS7 2960
+#define NOTE_G7 3136
+#define NOTE_GS7 3322
+#define NOTE_A7 3520
+#define NOTE_AS7 3729
+#define NOTE_B7 3951
+#define NOTE_C8 4186
+#define NOTE_CS8 4435
+#define NOTE_D8 4699
+#define NOTE_DS8 4978
+
+// *************************** KEYPAD ***************************
+
+// tastatura cu 4 linii si 4 coloane
+const byte ROWS = 4;
+const byte COLS = 4;
+
+// tasta produsa de fiecare buton
+char hexaKeys[ROWS][COLS] = {{'1', '2', '3', 'A'},
+                             {'4', '5', '6', 'B'},
+                             {'7', '8', '9', 'C'},
+                             {'*', '0', '#', 'D'}};
+
+// pinii la care este conectata tastatura
+byte rowPins[ROWS] = {3, 2, 9, 8};
+byte colPins[COLS] = {4, 5, 6, 7};
+
+// clasa care interactioneaza cu tastatura
+Keypad customKeypad(makeKeymap(hexaKeys), rowPins, colPins, ROWS, COLS);
+
+// *************************** RGB/DISPLAY ***************************
+
+// IMPORTANT: avem nevoie de 9 LED-uri, dar un shift register contine
+// doar 8 biti; prin urmare, ultimul LED e legat direct la Arduino
+
+// folosim LED-uri RGB, dar numai rosu si verde (separat)
+// fiecare shift register se ocupa cu o singura culoare
+
+// SHIFTER for Red
+byte dataPinR = A0;
+byte latchPinR = A1;
+byte clockPinR = A2;
+
+// SHIFTER for Green
+byte dataPinG = A3;
+byte latchPinG = A4;
+byte clockPinG = A5;
+
+byte lastLedR = 13;
+
+byte lastLedG = 12;
+
+// *************************** STATUS LED(s) ***************************
+
+// avem un LED RGB care indica statusul la finalul partidei
+
+byte ledWin = 11;
+byte ledLose = 10;
+byte ledDraw = 1;
+
+// *************************** BUZZER ***************************
+
+byte pinBuzz = 0;
+
+// *************************** GAME STATE ***************************
+
+// matricea contine spatii pentru pozitiile libere,
+// si X sau 0 pentru pozitiile jucate
+
+char matrix[3][3];
+
+bool gameOver = false;
+
+enum WinState {
+    wsNONE = 1,
+
+    wsWIN = 11,
+    wsLOSS = 12,
+    wsDRAW = 13
+};
+
+// *************************** *** *** *** ***************************
+
+// *************************** SHIFTER FUNCTIONS ***************************
+
+void writeShifter(byte dataPin, byte latchPin, byte clockPin, byte value) {
+    digitalWrite(latchPin, LOW);
+    shiftOut(dataPin, clockPin, MSBFIRST, value);
+    digitalWrite(latchPin, HIGH);
+}
+
+// *************************** DISPLAY FUNCTIONS ***************************
+
+void initMatrix() {
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            matrix[i][j] = ' ';
+        }
+    }
+}
+
+void printMatrix() {
+    // generam un numar folosind primele 8 alegeri pentru Rosu
+    // si il scriem pe shifterul rosu
+
+    byte valR = 0;
+    for (byte i = 0; i < 3; ++i) {
+        for (byte j = 0; j < 3; ++j) {
+            // trebuie ignorata ultima pozitie, pentru ca e pe LED separat
+            if ((i == 2) && (j == 2)) {
+                break;
+            }
+
+            if (matrix[i][j] == '0') {
+                valR = (byte)(valR | (1U << (i * 3 + j)));
+            }
+        }
+    }
+
+    writeShifter(dataPinR, latchPinR, clockPinR, valR);
+
+    // si ultima alegere pentru R
+    if (matrix[2][2] == '0') {
+        digitalWrite(lastLedR, HIGH);
+    }
+
+    // repetam partea de mai sus pentru Verde
+
+    byte valG = 0;
+    for (byte i = 0; i < 3; ++i) {
+        for (byte j = 0; j < 3; ++j) {
+            // trebuie ignorata ultima pozitie, pentru ca e pe LED separat
+            if ((i == 2) && (j == 2)) {
+                break;
+            }
+
+            if (matrix[i][j] == 'X') {
+                valG = (byte)(valG | (1U << (i * 3 + j)));
+            }
+        }
+    }
+
+    writeShifter(dataPinG, latchPinG, clockPinG, valG);
+
+    // si ultima alegere pentru G
+    if (matrix[2][2] == 'X') {
+        digitalWrite(lastLedG, HIGH);
+    }
+
+    // pentru claritate, daca ultima alegere este libera, scriem LOW
+    if (matrix[2][2] == ' ') {
+        digitalWrite(lastLedR, LOW);
+        digitalWrite(lastLedG, LOW);
+    }
+}
+
+// *************************** GAME LOGIC ***************************
+
+bool playerMove(char c) {
+    switch (c) {
+        case '1':
+            if (matrix[0][0] != ' ') {
+                return false;
+            }
+            matrix[0][0] = 'X';
+            break;
+
+        case '2':
+            if (matrix[0][1] != ' ') {
+                return false;
+            }
+            matrix[0][1] = 'X';
+            break;
+
+        case '3':
+            if (matrix[0][2] != ' ') {
+                return false;
+            }
+            matrix[0][2] = 'X';
+            break;
+
+        case '4':
+            if (matrix[1][0] != ' ') {
+                return false;
+            }
+            matrix[1][0] = 'X';
+            break;
+
+        case '5':
+            if (matrix[1][1] != ' ') {
+                return false;
+            }
+            matrix[1][1] = 'X';
+            break;
+
+        case '6':
+            if (matrix[1][2] != ' ') {
+                return false;
+            }
+            matrix[1][2] = 'X';
+            break;
+
+        case '7':
+            if (matrix[2][0] != ' ') {
+                return false;
+            }
+            matrix[2][0] = 'X';
+            break;
+
+        case '8':
+            if (matrix[2][1] != ' ') {
+                return false;
+            }
+            matrix[2][1] = 'X';
+            break;
+
+        case '9':
+            if (matrix[2][2] != ' ') {
+                return false;
+            }
+            matrix[2][2] = 'X';
+            break;
+    }
+    return true;
+}
+
+int getBiasWin(int thisPosition, int checkPosition1, int checkPosition2) {
+    if (matrix[thisPosition / 3][thisPosition % 3] == ' ' &&
+        matrix[checkPosition1 / 3][checkPosition1 % 3] == '0' &&
+        matrix[checkPosition2 / 3][checkPosition2 % 3] == '0') {
+        return 100;
+    } else {
+        return 0;
+    }
+}
+
+int getBiasStop(int thisPosition, int checkPosition1, int checkPosition2) {
+    if (matrix[thisPosition / 3][thisPosition % 3] == ' ' &&
+        matrix[checkPosition1 / 3][checkPosition1 % 3] == 'X' &&
+        matrix[checkPosition2 / 3][checkPosition2 % 3] == 'X') {
+        return 20;
+    } else {
+        return 0;
+    }
+}
+
+void computerMove() {
+    int bias[] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    int bestMove = -1;
+    int topBias = 0;
+    // can computer win
+    bias[0] = bias[0] + getBiasWin(0, 1, 2);
+    bias[0] = bias[0] + getBiasWin(0, 4, 8);
+    bias[0] = bias[0] + getBiasWin(0, 3, 6);
+    bias[1] = bias[1] + getBiasWin(1, 0, 2);
+    bias[1] = bias[1] + getBiasWin(1, 4, 7);
+    bias[2] = bias[2] + getBiasWin(2, 0, 1);
+    bias[2] = bias[2] + getBiasWin(2, 4, 6);
+    bias[2] = bias[2] + getBiasWin(2, 5, 8);
+    bias[3] = bias[3] + getBiasWin(3, 0, 6);
+    bias[3] = bias[3] + getBiasWin(3, 4, 5);
+    bias[4] = bias[4] + getBiasWin(4, 0, 8);
+    bias[4] = bias[4] + getBiasWin(4, 1, 7);
+    bias[4] = bias[4] + getBiasWin(4, 2, 6);
+    bias[4] = bias[4] + getBiasWin(4, 3, 5);
+    bias[5] = bias[5] + getBiasWin(5, 2, 8);
+    bias[5] = bias[5] + getBiasWin(5, 3, 4);
+    bias[6] = bias[6] + getBiasWin(6, 0, 3);
+    bias[6] = bias[6] + getBiasWin(6, 2, 4);
+    bias[6] = bias[6] + getBiasWin(6, 7, 8);
+    bias[7] = bias[7] + getBiasWin(7, 1, 4);
+    bias[7] = bias[7] + getBiasWin(7, 6, 8);
+    bias[8] = bias[8] + getBiasWin(8, 0, 4);
+    bias[8] = bias[8] + getBiasWin(8, 2, 5);
+    bias[8] = bias[8] + getBiasWin(8, 6, 7);
+    // can computer stop the human from winning
+    bias[0] = bias[0] + getBiasStop(0, 1, 2);
+    bias[0] = bias[0] + getBiasStop(0, 4, 8);
+    bias[0] = bias[0] + getBiasStop(0, 3, 6);
+    bias[1] = bias[1] + getBiasStop(1, 0, 2);
+    bias[1] = bias[1] + getBiasStop(1, 4, 7);
+    bias[2] = bias[2] + getBiasStop(2, 0, 1);
+    bias[2] = bias[2] + getBiasStop(2, 4, 6);
+    bias[2] = bias[2] + getBiasStop(2, 5, 8);
+    bias[3] = bias[3] + getBiasStop(3, 0, 6);
+    bias[3] = bias[3] + getBiasStop(3, 4, 5);
+    bias[4] = bias[4] + getBiasStop(4, 0, 8);
+    bias[4] = bias[4] + getBiasStop(4, 1, 7);
+    bias[4] = bias[4] + getBiasStop(4, 2, 6);
+    bias[4] = bias[4] + getBiasStop(4, 3, 5);
+    bias[5] = bias[5] + getBiasStop(5, 2, 8);
+    bias[5] = bias[5] + getBiasStop(5, 3, 4);
+    bias[6] = bias[6] + getBiasStop(6, 0, 3);
+    bias[6] = bias[6] + getBiasStop(6, 2, 4);
+    bias[6] = bias[6] + getBiasStop(6, 7, 8);
+    bias[7] = bias[7] + getBiasStop(7, 1, 4);
+    bias[7] = bias[7] + getBiasStop(7, 6, 8);
+    bias[8] = bias[8] + getBiasStop(8, 0, 4);
+    bias[8] = bias[8] + getBiasStop(8, 2, 5);
+    bias[8] = bias[8] + getBiasStop(8, 6, 7);
+    // add a small random value to each possible move
+    for (int i = 0; i < 9; i++) {
+        if (matrix[i / 3][i % 3] == ' ') {
+            bias[i] = bias[i] + (int)random(1, 5);
+        }
+    }
+    // get best move
+    for (int i = 0; i < 9; i++) {
+        if (bias[i] > topBias) {
+            topBias = bias[i];
+            bestMove = i;
+        }
+    }
+    // make move
+    if (bestMove != -1) {
+        matrix[bestMove / 3][bestMove % 3] = '0';
+    }
+}
+
+WinState checkForWin() {
+    WinState winState = wsNONE;
+    // check for 'X' win
+    if (matrix[0][0] == 'X' && matrix[0][1] == 'X' && matrix[0][2] == 'X') {
+        winState = wsWIN;
+    }
+    if (matrix[1][0] == 'X' && matrix[1][1] == 'X' && matrix[1][2] == 'X') {
+        winState = wsWIN;
+    }
+    if (matrix[2][0] == 'X' && matrix[2][1] == 'X' && matrix[2][2] == 'X') {
+        winState = wsWIN;
+    }
+    if (matrix[0][0] == 'X' && matrix[1][0] == 'X' && matrix[2][0] == 'X') {
+        winState = wsWIN;
+    }
+    if (matrix[0][1] == 'X' && matrix[1][1] == 'X' && matrix[2][1] == 'X') {
+        winState = wsWIN;
+    }
+    if (matrix[0][2] == 'X' && matrix[1][2] == 'X' && matrix[2][2] == 'X') {
+        winState = wsWIN;
+    }
+    if (matrix[0][0] == 'X' && matrix[1][1] == 'X' && matrix[2][2] == 'X') {
+        winState = wsWIN;
+    }
+    if (matrix[0][2] == 'X' && matrix[1][1] == 'X' && matrix[2][0] == 'X') {
+        winState = wsWIN;
+    }
+    // check for '0' win
+    if (matrix[0][0] == '0' && matrix[0][1] == '0' && matrix[0][2] == '0') {
+        winState = wsLOSS;
+    }
+    if (matrix[1][0] == '0' && matrix[1][1] == '0' && matrix[1][2] == '0') {
+        winState = wsLOSS;
+    }
+    if (matrix[2][0] == '0' && matrix[2][1] == '0' && matrix[2][2] == '0') {
+        winState = wsLOSS;
+    }
+    if (matrix[0][0] == '0' && matrix[1][0] == '0' && matrix[2][0] == '0') {
+        winState = wsLOSS;
+    }
+    if (matrix[0][1] == '0' && matrix[1][1] == '0' && matrix[2][1] == '0') {
+        winState = wsLOSS;
+    }
+    if (matrix[0][2] == '0' && matrix[1][2] == '0' && matrix[2][2] == '0') {
+        winState = wsLOSS;
+    }
+    if (matrix[0][0] == '0' && matrix[1][1] == '0' && matrix[2][2] == '0') {
+        winState = wsLOSS;
+    }
+    if (matrix[0][2] == '0' && matrix[1][1] == '0' && matrix[2][0] == '0') {
+        winState = wsLOSS;
+    }
+    // check for draw
+    if (winState == wsNONE) {
+        bool draw = true;
+
+        for (int i = 0; i < 9; i++) {
+            if (matrix[i / 3][i % 3] == ' ') {
+                draw = false;
+            }
+        }
+        if (draw) {
+            winState = wsDRAW;
+        }
+    }
+    return winState;
+}
+
+// *************************** ARDUINO ***************************
+
+void setup() {
+    pinMode(latchPinR, OUTPUT);
+    pinMode(clockPinR, OUTPUT);
+    pinMode(dataPinR, OUTPUT);
+
+    pinMode(latchPinG, OUTPUT);
+    pinMode(clockPinG, OUTPUT);
+    pinMode(dataPinG, OUTPUT);
+
+    pinMode(lastLedR, OUTPUT);
+    pinMode(lastLedG, OUTPUT);
+
+    pinMode(ledWin, OUTPUT);
+    pinMode(ledLose, OUTPUT);
+    pinMode(ledDraw, OUTPUT);
+
+    pinMode(pinBuzz, OUTPUT);
+
+    initMatrix();
+    printMatrix();
+}
+
+void loop() {
+    char c = customKeypad.getKey();
+    if (c) {
+        if (!gameOver) {
+            if (c >= '1' && c <= '9') {
+                bool moved = playerMove(c);
+                if (moved) {
+                    WinState win = checkForWin();
+                    if (win == wsNONE) {
+                        computerMove();
+                        win = checkForWin();
+                        if (win != wsNONE) {
+                            printMatrix();
+                            if (win == wsDRAW) {
+                                digitalWrite(ledDraw, HIGH);
+                            } else {
+                                digitalWrite(ledLose, HIGH);
+
+                                tone(pinBuzz, NOTE_G4);
+                                delay(250);
+                                tone(pinBuzz, NOTE_C4);
+                                delay(500);
+                                noTone(pinBuzz);
+                            }
+
+                            gameOver = true;
+                            return;
+                        }
+                    } else {
+                        printMatrix();
+                        if (win == wsDRAW) {
+                            digitalWrite(ledDraw, HIGH);
+                        } else {
+                            digitalWrite(ledWin, HIGH);
+
+                            const byte NOTE_SUSTAIN = 100;
+                            for (byte nLoop = 0; nLoop < 2; nLoop++) {
+                                tone(pinBuzz, NOTE_A5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_B5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_C5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_B5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_C5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_D5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_C5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_D5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_E5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_D5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_E5);
+                                delay(NOTE_SUSTAIN);
+                                tone(pinBuzz, NOTE_E5);
+                                delay(NOTE_SUSTAIN);
+                            }
+                            noTone(pinBuzz);
+                        }
+
+                        gameOver = true;
+                        return;
+                    }
+                }
+            }
+            printMatrix();
+        } else {
+            if (c == 'D') {
+                initMatrix();
+                printMatrix();
+
+                digitalWrite(ledWin, LOW);
+                digitalWrite(ledLose, LOW);
+                digitalWrite(ledDraw, LOW);
+
+                gameOver = false;
+            }
+        }
+    }
+}
